@@ -58,55 +58,57 @@ def qm9_metad(start_system, ase_calculator, xtb_command='xtb', hmass=2, time=50.
     if store_dir is not None:
         os.makedirs(store_dir, exist_ok=True)
 
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        os.chdir(tmpdirname)
-        #write input file
-        with open('metadyn.inp', 'w') as f:
-            #md block
-            f.write(f"$md\n  hmass={hmass}\n  time={time}\n  temp={temp}\n  ")
-            f.write(f"step={step}\n  shake={shake}\n  dump={dump}\n  $end\n")
-            #metad block
-            f.write(f"$metadyn\n  save={save}\n  kpush={kpush}\n  alp={alp}\n$end\n")
-        
-        #input coordinates
-        write('input.xyz', curr_sys)
+    tmpdirname = os.path.join('/nfsscratch', 'alf', prefix)
+    os.makedirs(tmpdirname, exist_ok=True)
 
-        #run metadynamics
-        runcmd = [xtb_command, '--md', '--input', 'metadyn.inp', 'input.xyz']
-        proc = subprocess.run(runcmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    os.chdir(tmpdirname)
+    #write input file
+    with open('metadyn.inp', 'w') as f:
+        #md block
+        f.write(f"$md\n  hmass={hmass}\n  time={time}\n  temp={temp}\n  ")
+        f.write(f"step={step}\n  shake={shake}\n  dump={dump}\n  $end\n")
+        #metad block
+        f.write(f"$metadyn\n  save={save}\n  kpush={kpush}\n  alp={alp}\n$end\n")
+    
+    #input coordinates
+    write('input.xyz', curr_sys)
 
-        if store_dir is not None:
-            outfile = os.path.join(store_dir, f"{prefix}_sample.out")
-            with open(outfile, 'w') as f:
-                f.write(proc.stdout)
-                f.write(proc.stderr)
+    #run metadynamics
+    runcmd = [xtb_command, '--md', '--input', 'metadyn.inp', 'input.xyz']
+    proc = subprocess.run(runcmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-        #read structures from trajectory
-        cluster_xyz = os.path.join(tmpdirname, 'xtb.trj') 
+    if store_dir is not None:
+        outfile = os.path.join(store_dir, f"{prefix}_sample.out")
+        with open(outfile, 'w') as f:
+            f.write(proc.stdout)
+            f.write(proc.stderr)
 
-        if store_dir is not None:
-            outfile = os.path.join(store_dir, f"{prefix}_trj.xyz")
-            runcmd = ['cp', cluster_xyz, outfile]
-            _ = subprocess.run(runcmd)
+    #read structures from trajectory
+    cluster_xyz = os.path.join(tmpdirname, 'xtb.trj') 
 
-        #loop over snapshots and return the snapshot if it meets criteria
-        traj = read(cluster_xyz, format='xyz', index=':')
-        for atoms in traj:
-            atoms.set_calculator(ase_calculator)
-            atoms.calc.calculate(atoms, properties=['energy_stdev','forces_stdev_mean','forces_stdev_max'])
-            Es = atoms.calc.results['energy_stdev']
-            Fs = atoms.calc.results['forces_stdev_mean']
-            Fsmax = atoms.calc.results['forces_stdev_max']
+    if store_dir is not None:
+        outfile = os.path.join(store_dir, f"{prefix}_trj.xyz")
+        runcmd = ['cp', cluster_xyz, outfile]
+        _ = subprocess.run(runcmd)
 
-            Ecrit = Es > float(Escut)
-            Fcrit = Fs > float(Fscut)
-            Fmcrit = Fsmax > 3*float(Fscut)
+    #loop over snapshots and return the snapshot if it meets criteria
+    traj = read(cluster_xyz, format='xyz', index=':')
+    for atoms in traj:
+        atoms.set_calculator(ase_calculator)
+        atoms.calc.calculate(atoms, properties=['energy_stdev','forces_stdev_mean','forces_stdev_max'])
+        Es = atoms.calc.results['energy_stdev']
+        Fs = atoms.calc.results['forces_stdev_mean']
+        Fsmax = atoms.calc.results['forces_stdev_max']
 
-            if Ecrit or Fcrit or Fmcrit:
-                start_system[1] = Atoms(atoms.get_chemical_symbols(), positions=atoms.get_positions(wrap=True),
-                                        cell=atoms.get_cell(), pbc=atoms.get_pbc())
-                start_system[2] = {}
-                return(start_system)
+        Ecrit = Es > float(Escut)
+        Fcrit = Fs > float(Fscut)
+        Fmcrit = Fsmax > 3*float(Fscut)
+
+        if Ecrit or Fcrit or Fmcrit:
+            start_system[1] = Atoms(atoms.get_chemical_symbols(), positions=atoms.get_positions(wrap=True),
+                                    cell=atoms.get_cell(), pbc=atoms.get_pbc())
+            start_system[2] = {}
+            return(start_system)
         
     #if we get here, no snapshots met the criteria
     start_system[1] = Atoms()
